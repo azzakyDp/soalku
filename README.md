@@ -721,6 +721,91 @@ Integration test memakai PostgreSQL lokal terisolasi untuk role, agregasi per si
 snapshot tanpa jawaban, retry/konflik/konkurensi, rollback saat gagal, batas lock,
 deadline yang tidak di-reset, serta penerapan ulang/rollback/constraint migrasi V4.
 Jalankan `mvn -Ppostgres-it clean install` sesuai environment Step 2; test tidak
-menggunakan Gemini atau Supabase. Endpoint menjawab soal, pencatatan jawaban, dan
-evaluasi belum dibuat; validasi deadline saat menerima jawaban diterapkan bersama
-endpoint jawaban pada step berikutnya, memakai `berakhir_at` server yang tersimpan.
+menggunakan Gemini atau Supabase. Submit jawaban, pencatatan riwayat, evaluasi,
+dan validasi `berakhir_at` saat menerima jawaban ditambahkan pada Step 9 di bawah.
+
+## Step 9 Submit Jawaban dan Evaluasi
+
+**`POST /api/latihan/sesi/{id}/jawaban`** memerlukan bearer JWT SISWA pemilik sesi.
+Body menerima hanya ID soal dan opsi dari snapshot sesi Step 8:
+
+```json
+{"soalId":101,"opsiId":402}
+```
+
+Identitas siswa, benar/salah, waktu jawab, dan status sesi tidak dapat diisi klien.
+Filter namespace dan method security memeriksa role; service memverifikasi role
+akun terkini dan mencari sesi dengan pasangan ID/pemilik. Sesi siswa lain maupun
+sesi yang tidak ada mendapat `404`. MENTOR mendapat `403`, tanpa token `401`.
+Soal yang tidak terpilih dalam snapshot, opsi dari soal lain, opsi tidak ditemukan,
+ID tidak positif, body tidak lengkap, dan field asing mendapat `400`.
+
+Server mengambil kunci dari opsi tersimpan dan menulis `riwayat_jawaban` berisi
+`sesi_id`, `soal_id`, `opsi_dipilih`, `is_benar`, dan `dijawab_at` server UTC.
+Soal yang disetujui sudah tidak dapat diedit melalui alur review Step 7.
+Response `200` memuat ID riwayat/sesi/soal, opsi yang dipilih, `benar`, dan
+`dijawabAt`; tidak mengirim semua kunci atau jawaban siswa lain.
+
+Pasangan `(sesi_id,soal_id)` menjadi identitas operasi: retry dengan opsi sama
+mengembalikan receipt yang sama tanpa baris/percobaan tambahan. Opsi berbeda
+setelah jawaban tersimpan ditolak `409 ANSWER_ALREADY_SUBMITTED`. Replay jawaban
+yang sudah diterima tetap diperbolehkan sesudah deadline atau sesi selesai;
+deadline dan timestamp lama tidak diubah. Submit tidak membutuhkan header
+idempotency tambahan. Row lock per sesi menserialisasi submit serentak, dan
+constraint unik serta FK komposit soal/opsi V1 memberi perlindungan di database.
+
+Untuk jawaban baru, waktu server harus **lebih awal** dari `berakhir_at` bila ada;
+tepat pada deadline mendapat `409 SESSION_EXPIRED`. Sesi yang sudah selesai
+menolak jawaban baru dengan `409 SESSION_COMPLETED`. Setelah semua soal snapshot
+terjawab, `selesai_at` dicatat dalam transaksi yang sama dengan jawaban terakhir.
+Kegagalan penyelesaian sesi me-rollback jawaban tersebut juga; retry tetap aman.
+Sesi lama tanpa snapshot tidak menerima jawaban baru (`409 SESSION_SNAPSHOT_REQUIRED`),
+tetapi riwayat yang sudah ada tetap masuk evaluasi. Tidak ada cron atau jawaban
+otomatis untuk soal yang belum dijawab saat waktu habis.
+
+**`GET /api/latihan/evaluasi?page=0&size=20`** menampilkan agregat seluruh riwayat
+siswa yang login. Tambahkan `sesiId=<id>` untuk membatasi pada satu sesi sendiri.
+Halaman berbasis nol, size 1–100, page 0–1000000; parameter tidak valid mendapat
+`400`, sesi tidak ditemukan/bukan miliknya `404`. Evaluasi boleh dibaca saat sesi
+berjalan maupun setelah deadline/selesai; GET tidak mengubah data.
+
+Response berisi `sesiId` (null untuk seluruh riwayat), `content`, `page`, `size`,
+`totalElements`, dan `totalPages`. Setiap bagian mempunyai:
+
+- `bagianMateriId`, `judulBagian`, `totalJawaban`, `jumlahBenar`, `jumlahSalah`;
+- `persentaseBenar` = jumlah benar ÷ seluruh jawaban × 100, dibulatkan dua desimal;
+- `perluDiulang` dan `rekomendasi` untuk bagian yang masih mempunyai jawaban salah.
+
+Urutan dari persentase benar paling rendah, lalu ID bagian naik untuk tie yang
+stabil. Pengurutan menggunakan rasio sebelum pembulatan. Setiap percobaan yang
+tersimpan berbobot sama; bukan rata-rata persentase per soal/per sesi. Bagian
+tanpa jawaban tidak diberi skor nol; tanpa riwayat, `content` kosong dan total 0.
+Soal yang belum dijawab juga tidak dihitung sebagai salah. Histori siswa lain
+selalu dikecualikan melalui `sesi_latihan.siswa_id`, sekalipun soalnya sama.
+
+Repository menggunakan query agregat `GROUP BY bagian_materi`, `COUNT`, dan
+`SUM(CASE WHEN is_benar ...)`, berikut query `COUNT(DISTINCT bagian_materi_id)`
+untuk pagination. JPQL diterjemahkan Hibernate menjadi SQL agregat langsung;
+service hanya memetakan proyeksi hasil, tanpa fetch riwayat/section per baris.
+Data halaman dan total dibaca dalam transaksi read-only REPEATABLE READ.
+Index sesi/pemilik, pasangan sesi/soal pada riwayat, dan FK yang sudah ada mendukung
+filter/join; tidak diperlukan migrasi atau tabel baru.
+
+Unit test `EvaluasiBagianTest` memeriksa rumus, pembulatan, skor 0/100, rekomendasi,
+angka besar, dan data tidak valid. `AnswerEvaluationIT` memakai endpoint/JWT/JPA/
+PostgreSQL nyata (hanya Clock yang dikendalikan) untuk grading, ownership, opsi
+lintas soal, deadline persis, replay/konflik/konkurensi, penyelesaian sesi, rollback,
+scope agregat, bobot percobaan, dan input. Test N+1 membandingkan 5 dengan 20 bagian:
+jumlah statement JPA tetap maksimal tiga (akun + agregat halaman + count), bukan
+bertambah per bagian. Query timeout adalah statement tetap di luar hitungan JPA.
+History hasil submit juga diuji dipakai oleh Fokus Kelemahan pada sesi berikutnya.
+
+Submit memakai lock timeout 2 detik, statement 5 detik, dan transaksi 10 detik;
+evaluasi memakai timeout 5 detik. Database sibuk menghasilkan `503 PRACTICE_BUSY`,
+kegagalan penyimpanan `500`; log menyimpan ID operasi, kategori/SQL state, dan
+diagnostik yang disanitasi tanpa token, pilihan jawaban, isi soal, atau SQL mentah.
+Health tetap memakai pemeriksaan DB Actuator. Verifikasi dengan
+`mvn -Ppostgres-it clean install` pada database lokal `*_test`; tidak ada panggilan
+Gemini atau migrasi/test ke Supabase. Dasbor dan endpoint Mentor untuk melihat
+progres seluruh siswa tetap di luar cakupan step ini. Verifikasi manual oleh
+anggota tim lain sesuai PRD masih perlu dilakukan tim.

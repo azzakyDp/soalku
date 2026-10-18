@@ -29,4 +29,9 @@ public class SesiLatihanEntity {
     public Instant getMulaiAt() { return mulaiAt; }
     public Instant getBerakhirAt() { return berakhirAt; }
     public String getSoalSnapshot() { return soalSnapshot; }
+    public Instant getSelesaiAt() { return selesaiAt; }
+    public void complete(Instant at) {
+        if(at==null || at.isBefore(mulaiAt)) throw new IllegalArgumentException("Invalid completion timestamp");
+        if(selesaiAt==null) selesaiAt=at;
+    }
 }
