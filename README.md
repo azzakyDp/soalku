@@ -806,6 +806,93 @@ kegagalan penyimpanan `500`; log menyimpan ID operasi, kategori/SQL state, dan
 diagnostik yang disanitasi tanpa token, pilihan jawaban, isi soal, atau SQL mentah.
 Health tetap memakai pemeriksaan DB Actuator. Verifikasi dengan
 `mvn -Ppostgres-it clean install` pada database lokal `*_test`; tidak ada panggilan
-Gemini atau migrasi/test ke Supabase. Dasbor dan endpoint Mentor untuk melihat
-progres seluruh siswa tetap di luar cakupan step ini. Verifikasi manual oleh
+Gemini atau migrasi/test ke Supabase. Dasbor dan progres siswa untuk Mentor
+ditambahkan pada Step 10 di bawah. Verifikasi manual oleh
 anggota tim lain sesuai PRD masih perlu dilakukan tim.
+
+## Step 10 Dashboard per Role
+
+Dashboard adalah operasi GET read-only. JWT memverifikasi identitas, filter
+namespace serta method security memeriksa role, dan service memverifikasi role
+akun terkini pada database. Tanpa token mendapat `401`, role tidak sesuai atau
+role akun yang sudah berubah mendapat `403`. Seluruh ID dan cakupan SISWA
+berasal dari JWT; parameter tambahan `siswaId` tidak dapat mengganti pemilik.
+
+### Dashboard SISWA
+
+**`GET /api/dashboard/siswa?page=0&size=20`** mengembalikan:
+
+- `progres`: ID/nama sendiri, `totalMateri`, `totalSesi`, `sesiSelesai`,
+  `sesiBerjalan`, `sesiKedaluwarsa`, `totalJawaban`, `jumlahBenar`, `jumlahSalah`,
+  `persentaseBenar`, `persentaseSesiSelesai`, dan `latihanTerakhirAt`.
+- `riwayat`: halaman riwayat **sesi latihan sendiri**, berisi mode, timestamp,
+  status, jumlah soal terpilih, jumlah jawaban/benar, akurasi dan penyelesaian.
+
+Akurasi dihitung dari seluruh jawaban tersimpan, tanpa rata-rata per sesi.
+Persentase sesi selesai adalah sesi dengan `selesai_at` terisi ÷ seluruh sesi.
+Persentase penyelesaian per riwayat adalah jumlah jawaban ÷ jumlah soal snapshot.
+Persentase dibulatkan dua desimal. Denominator yang belum tersedia/masih nol
+ditampilkan sebagai null, sehingga siswa baru tidak diberi skor nol buatan.
+Sesi lama tanpa snapshot mempunyai `jumlahSoal` dan `persentasePenyelesaian` null;
+jawaban serta timestamp yang sudah tersimpan tetap dihitung.
+
+Status `SELESAI` memakai `selesai_at`; jika belum selesai dan deadline sudah
+tercapai (termasuk tepat pada deadline), status `KEDALUWARSA`; lainnya `BERJALAN`.
+Ringkasan dan riwayat memakai waktu server yang sama. Dashboard tidak mengubah
+status sesi atau menulis timestamp. Riwayat diurutkan `mulai_at DESC,id DESC`.
+Pagination memakai total sesi dari ringkasan dalam snapshot transaksi yang sama.
+
+### Dashboard MENTOR
+
+**`GET /api/mentor/dashboard?reviewPage=0&reviewSize=10&siswaPage=0&siswaSize=20`**
+mempunyai dua daftar dengan pagination independen:
+
+- `antreanReview`: antrean `MENUNGGU` dari service review Step 7, termasuk opsi
+  untuk kebutuhan review, diurutkan `created_at,id` naik.
+- `siswa`: ringkasan progres SISWA, termasuk siswa tanpa materi/sesi/jawaban,
+  diurutkan ID siswa naik. DTO hanya memuat ID/nama dan metrik progres; tidak
+  mengirim email, password/hash, token, file path, atau teks asli materi.
+
+`totalMenungguReview` dan `totalSiswa` adalah total seluruh hasil, bukan ukuran
+halaman. Daftar SISWA tetap tampil walau antrean review kosong, dan sebaliknya.
+
+**Cakupan siswa binaan pada MVP:** PRD bagian 2 memberikan MENTOR hak melihat
+progres semua siswa, sedangkan F7 memakai istilah siswa binaan. Sembilan tabel
+PRD tidak memiliki relasi penugasan Mentor–Siswa. Implementasi mengikuti hak
+akses global PRD 2 untuk seluruh akun `SISWA`, sama untuk setiap MENTOR; tidak
+menebak relasi dari pembuat kode undangan, pengunggah materi, atau reviewer.
+Jika produk kelak memerlukan penugasan privat per Mentor, diperlukan keputusan
+model data dan aturan akses tersendiri sebelum mengubah cakupan ini.
+
+### Batas, query, dan verifikasi
+
+Setiap page berbasis nol dengan batas 0–1000000; setiap size 1–100. Parameter
+numerik tidak valid mendapat `400`. Halaman di luar hasil tetap `200` dengan
+content kosong dan total yang benar. Tidak ada list tak terbatas dalam response.
+
+Read model memakai SQL agregat langsung. CTE `page_users` membatasi siswa lebih
+dulu; materi, sesi, dan jawaban diagregasi secara independen sebelum di-LEFT JOIN.
+Ini mencegah perkalian count akibat beberapa relasi one-to-many dan mempertahankan
+angka nol bagi siswa yang belum berlatih. Riwayat memakai satu query agregat per
+halaman, tanpa query per sesi. Queue review memakai bulk query opsi yang sudah
+ada, tanpa eager collection/N+1. SQL memakai schema Hibernate yang tervalidasi
+dan parameter binding untuk identitas, waktu, LIMIT dan OFFSET.
+
+Transaksi read-only REPEATABLE READ menjaga ringkasan, total, dan daftar pada
+snapshot database yang sama saat ada write serentak. Query/transaksi dibatasi
+5 detik; timeout/database sibuk mendapat `503 DASHBOARD_BUSY`, kegagalan query
+`500 DASHBOARD_FAILED`. Log terstruktur mencatat ID pengguna, halaman, ukuran
+hasil, request ID/durasi dan kategori kegagalan, tanpa data jawaban atau secret.
+Health tetap menggunakan pemeriksaan DB Actuator. Tidak ada tabel, migrasi,
+library, atau infrastruktur tambahan untuk dashboard.
+
+`DashboardIT` memakai PostgreSQL/JWT dan service nyata, hanya waktu yang
+dikendalikan. Test mencakup isolasi dua SISWA, batas role/token, role yang dicabut,
+agregat anti-duplikasi, status/deadline, siswa baru, sesi lama, dua pagination,
+tie ordering, halaman kosong, tidak bocornya data privat, dan timeout yang aman
+di-retry. Pengukur JDBC tanpa mock query membuktikan read query tetap konstan:
+maksimal 3 untuk dashboard SISWA dan 7 untuk MENTOR (tidak termasuk SET timeout),
+saat jumlah sesi atau siswa bertambah. Test transaksi lain yang commit tepat
+di antara query ringkasan/riwayat memastikan hasil dashboard tetap konsisten.
+Jalankan `mvn -Ppostgres-it clean install` dengan database lokal `*_test`.
+Verifikasi manual oleh anggota tim lain sesuai PRD masih perlu dilakukan tim.

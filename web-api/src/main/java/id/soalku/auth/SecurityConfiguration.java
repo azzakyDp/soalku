@@ -93,6 +93,7 @@ public class SecurityConfiguration {
                 .requestMatchers(HttpMethod.POST, "/api/materi/upload").hasRole("SISWA")
                 .requestMatchers(HttpMethod.POST, "/api/materi/*/generate").hasRole("SISWA")
                 .requestMatchers("/api/latihan", "/api/latihan/**").hasRole("SISWA")
+                .requestMatchers("/api/dashboard/siswa", "/api/dashboard/siswa/**").hasRole("SISWA")
                 .requestMatchers("/api/mentor", "/api/mentor/**").hasRole("MENTOR")
                 .anyRequest().authenticated());
         http.exceptionHandling(errors -> errors
