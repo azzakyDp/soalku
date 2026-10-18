@@ -16,4 +16,10 @@ public class OpsiJawabanEntity {
     public OpsiJawabanEntity(Long soalId,OpsiJawaban option) {
         this.soalId=soalId;teksOpsi=option.teks();urutan=(short)option.urutan();benar=option.benar();
     }
+    public Long getId() { return id; }
+    public Long getSoalId() { return soalId; }
+    public String getTeksOpsi() { return teksOpsi; }
+    public short getUrutan() { return urutan; }
+    public boolean isBenar() { return benar; }
+    public void edit(String text,boolean correct) { teksOpsi=text;benar=correct; }
 }

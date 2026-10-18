@@ -5,10 +5,11 @@ Dependency project saat ini adalah Flyway **11.7.2** (dikelola Spring Boot
 3.5.16). Versi Flyway tersebut memperingatkan bahwa pengujiannya baru sampai
 PostgreSQL 17. Warning ini bukan pernyataan versi PostgreSQL pada PRD.
 
-Versi PostgreSQL project Supabase pengguna **belum diketahui**: tidak ada
-project ref/koneksi Supabase atau `DB_URL` produksi yang tersedia pada checkout
-ini. Jangan menyimpulkan versinya 15/16/17/18 dari versi lokal atau dari default
-layanan. Pengujian lokal 18.4 tidak membuktikan kompatibilitas major lain.
+Koneksi session pooler Supabase berhasil diverifikasi secara read-only pada
+18 Oktober 2026: `server_version = 17.11`, `server_version_num = 170011`.
+Hanya query versi dijalankan; tidak ada migrasi, seed, atau integration test
+yang diarahkan ke database ini. Kredensial hanya tersimpan dalam `.env` lokal
+yang diabaikan Git. Pengujian lokal 18.4 tidak membuktikan kompatibilitas major 17.
 
 Pemilik project dapat menjalankan query read-only berikut pada SQL Editor
 Supabase (tidak menjalankan Flyway atau mengubah data produksi):
@@ -32,5 +33,6 @@ sudah menyertakan PostgreSQL 18, tetapi itu tidak mengubah versi 11.7.2 yang
 terpasang pada project. Upgrade Flyway perlu perubahan dependency dan regresi
 tersendiri; tidak dilakukan diam-diam pada checkpoint Step 1–6 ini.
 
-Risiko yang masih terbuka: major PostgreSQL produksi belum terverifikasi dan
-belum diuji secara cocok. Status ini harus ditutup sebelum deployment produksi.
+Risiko yang masih terbuka: PostgreSQL produksi 17.11 sudah terverifikasi,
+tetapi seluruh integration test saat ini masih dijalankan pada PostgreSQL lokal
+18.4. Ulangi suite pada PostgreSQL 17 terisolasi sebelum deployment produksi.

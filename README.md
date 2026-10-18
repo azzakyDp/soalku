@@ -64,6 +64,19 @@ JDBC dari konfigurasi koneksi project dan TLS sesuai konfigurasi penyedia;
 jangan menaruh password pada URL atau source. Tidak ada koneksi otomatis ke
 Supabase saat build atau test.
 
+Untuk shell aplikasi Windows, simpan nilai lokal di `.env` (diabaikan Git), lalu:
+
+```powershell
+.\scripts\Import-SoalKuEnv.ps1
+java -jar web-api/target/web-api-0.0.1-SNAPSHOT.jar
+```
+
+Script hanya mengekspor konfigurasi ke proses shell tersebut dan tidak mencetak
+nilainya; Maven tidak mengimpor `.env`. URL session pooler Supabase memakai
+format JDBC dengan `sslmode=require`, username/password terpisah. Pada startup
+aplikasi, Flyway tetap menjalankan migrasi yang belum diterapkan; pemeriksaan
+koneksi pada sesi Step 7 hanya membaca versi, tanpa menjalankan aplikasi ke Supabase.
+
 Database harus sudah dibuat. Saat startup, Flyway membuat schema `soalku` dan
 menerapkan `db/migration/V1__initial_schema.sql` sebelum Hibernate diinisialisasi.
 Akun migrasi memerlukan hak membuat schema/tabel/index. Hibernate memakai
@@ -413,9 +426,10 @@ Uji live pada sesi sebelumnya adalah verifikasi manual terpisah, bukan test CI.
 
 ### PostgreSQL dan build Windows
 
-Versi Supabase project belum tersedia untuk diverifikasi. Testing lokal memakai
-PostgreSQL 18.4/Flyway 11.7.2 dan masih mempunyai risiko perbedaan major dengan
-produksi. Query pemeriksaan read-only dan tindak lanjut dicatat pada
+Versi Supabase sudah diperiksa secara read-only: **PostgreSQL 17.11**. Testing
+lokal memakai PostgreSQL 18.4/Flyway 11.7.2 dan masih mempunyai risiko perbedaan
+major dengan produksi. Ulangi suite pada PostgreSQL 17 terisolasi sebelum deploy.
+Query pemeriksaan read-only dan tindak lanjut dicatat pada
 [status kompatibilitas PostgreSQL](docs/verification/postgres-compatibility.md).
 
 Checkout utama sekarang `C:\data\coding\soalku`; folder Documents lama menjadi
@@ -479,7 +493,7 @@ content, hasil lengkap `STOP`, jumlah soal/opsi, teks, satu kunci benar, opsi da
 pertanyaan duplikat, serta referensi gambar yang benar-benar berasal dari bagian
 tersebut. `jawaban_benar` memakai nomor opsi mulai 1; `gambar_id` integer atau
 null. Hasil baru selalu `MENUNGGU`, tanpa reviewer/waktu review. Alur persetujuan
-Mentor belum diimplementasikan pada step ini.
+Mentor ditambahkan pada Step 7 di bawah.
 
 Ringkasan ditulis ke `bagian_materi.teks_ringkasan`; setiap `Soal` dan
 `OpsiJawaban` disimpan dalam transaksi yang sama dengan penanda `generated_at`.
@@ -547,3 +561,73 @@ lease kedaluwarsa/writer lama, retry serentak, rollback hasil, dan row lock yang
 ditahan koneksi lain. Pengujian otomatis tidak memakai key/kuota Gemini asli.
 Uji live memakai key dari environment dan hanya materi fixture nonsensitif;
 verifikasi manual oleh anggota tim lain sesuai PRD tetap perlu dilakukan tim.
+
+## Step 7 Review Soal oleh MENTOR
+
+Semua endpoint berikut memerlukan bearer JWT MENTOR. JWT memverifikasi identitas,
+filter `/api/mentor/**` membatasi role sebelum controller, dan service memeriksa
+bahwa akun masih berstatus MENTOR di database. Tanpa token mendapat `401`, SISWA
+`403`. Sesuai PRD 2/F4, Mentor mereview antrean global dari seluruh materi siswa;
+belum ada relasi penugasan Mentor–Siswa dalam skema. Kunci jawaban pada response
+review hanya tersedia dalam namespace khusus MENTOR.
+
+| Method | Endpoint | Perilaku |
+| --- | --- | --- |
+| GET | `/api/mentor/soal?page=0&size=20` | Daftar hanya `MENUNGGU`, lengkap dengan opsi, urutan `created_at,id` naik |
+| PUT | `/api/mentor/soal/{id}` | Ganti teks pertanyaan dan seluruh isi/kunci opsi pada soal yang masih menunggu |
+| POST | `/api/mentor/soal/{id}/approve` | Tetapkan `DISETUJUI`; tanpa body |
+| POST | `/api/mentor/soal/{id}/reject` | Tetapkan `DITOLAK`; tanpa body |
+
+Pagination berbasis nol, size 1–100 dan page 0–1000000. Response daftar memiliki
+`content`, `page`, `size`, `totalElements`, dan `totalPages`. Daftar kosong tetap
+`200`. Pertanyaan memuat `id`, `bagianMateriId`, `pertanyaan`, `gambarId`,
+`statusReview`, `direviewOleh`, `direviewAt`, `createdAt`, serta `opsi` berurutan.
+Query menggunakan index status/created yang sudah ada dan satu bulk query opsi
+untuk satu halaman, tanpa eager collection atau N+1.
+
+Contoh body PUT untuk SMP (gunakan ID opsi dari response daftar):
+
+```json
+{
+  "pertanyaan": "Apa fungsi utama akar?",
+  "opsi": [
+    {"id": 101, "teks": "Menyerap air dan mineral", "benar": true},
+    {"id": 102, "teks": "Menghasilkan bunga", "benar": false},
+    {"id": 103, "teks": "Membentuk buah", "benar": false},
+    {"id": 104, "teks": "Menyebarkan biji", "benar": false}
+  ]
+}
+```
+
+Tepat 3 opsi SD atau 4 opsi SMP, satu kunci benar, seluruh ID unik dan harus
+milik soal tersebut. ID/urutan opsi dipertahankan; ID lintas soal ditolak. Opsi
+tidak boleh mempunyai teks identik setelah trim/normalisasi huruf kecil. Teks
+tidak boleh kosong (pertanyaan maksimal 3000 karakter, opsi 1000); field asing
+termasuk status/reviewer dari klien ditolak. Tidak ada pengubahan gambar,
+pemilik materi, tipe soal, atau jumlah opsi melalui endpoint edit ini.
+
+Edit mempertahankan `MENUNGGU` dan audit final tetap null sesuai constraint
+`ck_soal_review`. Event edit mencatat ID Mentor/soal pada log terstruktur.
+Approve/reject mencatat `direview_oleh` dari identitas JWT dan `direview_at` dari
+Clock server UTC dalam transaksi yang sama. Keputusan final tidak dapat dibalik
+atau diedit: `409`. Pengulangan keputusan yang sama mengembalikan hasil tersimpan
+tanpa mengganti reviewer/waktu, termasuk retry oleh Mentor lain. PUT berulang
+dengan isi sama mempertahankan ID opsi tanpa menggandakan data.
+
+Row lock per soal menserialisasi edit/keputusan yang bersamaan. Pergantian kunci
+melepas kunci lama terlebih dahulu, lalu menetapkan kunci baru dalam satu transaksi
+agar unique index kunci tidak bentrok. Kegagalan menulis opsi me-rollback seluruh
+perubahan. Lock timeout 2 detik dan timeout transaksi/statement 5 detik membatasi
+penantian. `400` untuk input/parameter/opsi tidak valid, `404` untuk soal hilang,
+`422` jika soal tidak mempunyai opsi/kunci valid saat approve, `503` untuk
+database sibuk (retry diperbolehkan), `500` bila penyimpanan gagal. Detail SQL/isi
+soal tidak dibocorkan melalui response/log. Health memakai pemeriksaan database
+Actuator yang sudah tersedia; tidak menambah dependency atau migrasi schema.
+
+Integration test `QuestionReviewIT` memakai JWT, filter, service, JPA, Flyway,
+dan PostgreSQL testing nyata: batas role, input, antrean/pagination, perubahan
+kunci, audit/retry, keputusan bersamaan, row lock timeout, rollback saat gagal,
+serta jumlah query yang dibatasi. Jalankan `mvn -Ppostgres-it clean install`
+dengan environment database lokal `*_test` sesuai Step 2. Tidak ada API Gemini
+atau database Supabase yang dipanggil test. Pemilihan soal `DISETUJUI` untuk
+latihan dikerjakan bersama endpoint latihan pada step berikutnya.

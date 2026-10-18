@@ -23,4 +23,17 @@ public class SoalEntity {
     }
     public Long getId() { return id; }
     public Long getBagianMateriId() { return bagianMateriId; }
+    public String getPertanyaan() { return pertanyaan; }
+    public Long getGambarId() { return gambarId; }
+    public StatusReview getStatusReview() { return statusReview; }
+    public Long getDireviewOleh() { return direviewOleh; }
+    public Instant getDireviewAt() { return direviewAt; }
+    public Instant getCreatedAt() { return createdAt; }
+    public void editPertanyaan(String text) { pertanyaan=text; }
+    public void review(StatusReview decision,Long mentor,Instant at) {
+        if (decision==null || decision==StatusReview.MENUNGGU || mentor==null || at==null)
+            throw new IllegalArgumentException("A final review requires a mentor and timestamp");
+        if (statusReview!=StatusReview.MENUNGGU) throw new IllegalStateException("Question already reviewed");
+        statusReview=decision;direviewOleh=mentor;direviewAt=at;
+    }
 }
