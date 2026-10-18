@@ -23,8 +23,8 @@ SHOW server_version_num;
 Sumber: [panduan resmi Supabase](https://supabase.com/docs/guides/database/postgres/which-version-of-postgres).
 Setelah hasil tersedia, gunakan PostgreSQL testing terisolasi dengan major yang
 sama dan jalankan `mvn -Ppostgres-it clean install` terhadap database lokal
-bernama `*_test`. Jalankan seluruh migrasi V1–V3, pengujian constraint, rollback,
-JPA, autentikasi, upload dan generasi sebelum deployment. Jangan arahkan
+bernama `*_test`. Jalankan seluruh migrasi V1–V4, pengujian constraint, rollback,
+JPA, autentikasi, upload, generasi, review dan sesi latihan sebelum deployment. Jangan arahkan
 integration test ke Supabase produksi; guard test memang membatasi loopback
 dan suffix `_test`.
 

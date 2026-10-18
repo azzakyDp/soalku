@@ -33,7 +33,7 @@ class PersistenceIT {
             initial.migrate();
             var latest=Flyway.configure().dataSource(databaseUrl(),databaseUser(),databasePassword())
                     .defaultSchema(connection.getSchema()).locations("classpath:db/migration")
-                    .configuration(java.util.Map.of("flyway.postgresql.transactional.lock","false")).load();
+                    .configuration(java.util.Map.of("flyway.postgresql.transactional.lock","false")).target("3").load();
             assertEquals(2,latest.migrate().migrationsExecuted);
             assertEquals(0,latest.migrate().migrationsExecuted);
             // Test-only simulation of retry after a partial non-transactional migration.

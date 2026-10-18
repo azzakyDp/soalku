@@ -630,4 +630,97 @@ kunci, audit/retry, keputusan bersamaan, row lock timeout, rollback saat gagal,
 serta jumlah query yang dibatasi. Jalankan `mvn -Ppostgres-it clean install`
 dengan environment database lokal `*_test` sesuai Step 2. Tidak ada API Gemini
 atau database Supabase yang dipanggil test. Pemilihan soal `DISETUJUI` untuk
-latihan dikerjakan bersama endpoint latihan pada step berikutnya.
+latihan ditambahkan pada Step 8 di bawah.
+
+## Step 8 Strategi Latihan dan Mulai Sesi
+
+`core` menyediakan `LatihanStrategy`, `AcakStrategy`, `BerwaktuStrategy`, dan
+`FokusKelemahanStrategy` tanpa dependency Spring/persistence. Ketiganya menerima
+iterator metadata kandidat unik, jumlah soal, waktu mulai, dan `RandomGenerator`
+yang dapat diberi seed saat unit test. Hanya kandidat `DISETUJUI` yang dapat dipilih.
+
+- **ACAK**: memilih subset dan urutan acak dari seluruh bank soal yang disetujui,
+  lintas bagian dan pemilik materi, sesuai F5. Tidak membatasi kandidat pada halaman
+  pertama; setiap kandidat mempunyai peluang yang sama.
+- **BERWAKTU**: pemilihan sama dengan Acak, ditambah deadline sesi dari waktu server.
+  Budget adalah jumlah soal yang benar-benar terambil × `LATIHAN_SECONDS_PER_QUESTION`
+  (default 60, rentang 1–600 detik). `RencanaLatihan.sudahBerakhir` bernilai true
+  tepat pada deadline dan sesudahnya. `selesai_at` tidak diisi saat sesi dimulai.
+- **FOKUS_KELEMAHAN**: mendahulukan bagian dengan rasio salah/total jawaban tertinggi
+  milik siswa yang sedang login. Bukan jumlah salah mentah. Perbandingan pecahan
+  memakai `BigInteger` untuk menghindari pembulatan dan overflow; nilai sama diacak.
+  Setelah soal bagian terlemah habis, lanjut bagian berikutnya. Bagian tanpa riwayat
+  dianggap 0%; jika semua belum punya riwayat, pemilihan menjadi acak.
+
+Endpoint **`POST /api/latihan/sesi`** memerlukan bearer JWT SISWA dan header
+**`Idempotency-Key: <UUID-baru>`**. Token memverifikasi identitas; filter namespace,
+method security, dan verifikasi role akun terkini membatasi otorisasi. Body hanya:
+
+```json
+{"mode":"FOKUS_KELEMAHAN","jumlahSoal":10}
+```
+
+`jumlahSoal` wajib 1–50. Field asing termasuk siswa/pemilik/status/kunci jawaban
+ditolak. Jika bank memiliki lebih sedikit soal, sesi berisi seluruh soal yang
+tersedia tanpa pengulangan. Jika tidak ada soal disetujui, respons `409` dengan
+`NO_APPROVED_QUESTIONS` dan tidak ada sesi dibuat.
+
+Response `201` memuat `sesiId`, `mode`, `mulaiAt`, `berakhirAt` (null untuk mode
+tanpa timer), dan `soal[]`. Setiap soal berisi ID, ID bagian, teks, referensi gambar,
+serta opsi berurutan yang hanya mempunyai ID/urutan/teks. **Kunci/is_benar tidak
+dikirim maupun disimpan dalam snapshot publik sesi.** Riwayat fokus diambil lewat
+`riwayat_jawaban → sesi_latihan.siswa_id`, sehingga riwayat siswa lain tidak ikut.
+Tidak ada pembatasan kepemilikan materi pada bank soal yang sudah disetujui;
+identitas pemilik sesi selalu berasal dari JWT, bukan input klien.
+
+Retry dengan key, siswa, mode, dan jumlah yang sama mengembalikan snapshot sesi
+yang sama (`201`), termasuk urutan soal dan deadline asli, walaupun bank/riwayat
+sudah berubah. Deadline yang telah lewat tidak di-reset. Key yang sama dengan
+mode/jumlah berbeda mendapat `409 IDEMPOTENCY_CONFLICT`. Key bersifat per siswa;
+siswa lain tidak dapat mengambil sesi milik siswa pertama menggunakan key itu.
+Gunakan UUID baru untuk sengaja memulai sesi baru.
+
+Pemilihan membaca kandidat memakai PostgreSQL cursor dengan fetch size 128 dan
+priority queue berukuran maksimal jumlah soal. Seluruh kandidat tetap diperiksa;
+memori tidak tumbuh mengikuti besar bank. Query fokus mengagregasi jawaban siswa
+sekali, memakai index siswa pada sesi dan index sesi pada riwayat yang sudah ada.
+Teks/opsi hanya diambil untuk maksimal 50 ID terpilih lewat dua bulk query,
+tanpa query per soal. SQL memakai schema aktual Hibernate agar test dan aplikasi
+tidak salah membaca `public`. Waktu pemilihan tetap O(N log jumlahSoal); bank/riwayat
+yang sangat besar dapat mencapai batas query dan mendapat respons retryable `503`.
+
+User row lock menserialisasi start per siswa; unique index `(siswa_id,request_key)`
+menjadi perlindungan tambahan. Sesi, snapshot, dan deadline ditulis atomik. Lock
+wait dibatasi 2 detik, statement 5 detik, transaksi 10 detik. Kegagalan database
+me-rollback sesi; ulangi dengan key sama. `400` untuk input/key tidak valid,
+`401` tanpa autentikasi, `403` untuk MENTOR/akun yang sudah bukan SISWA,
+`503 PRACTICE_BUSY` saat database sibuk, dan `500` untuk kegagalan penyimpanan.
+Log terstruktur mencatat ID siswa/sesi, mode, jumlah, durasi request dan kategori
+error, tanpa soal/opsi/token/key. Health menggunakan pemeriksaan DB Actuator yang
+sudah ada; startup memvalidasi mapping dan migrasi.
+
+V4 menambah metadata nullable pada `sesi_latihan`: `request_key`, `requested_count`,
+`soal_snapshot` JSONB, dan `berakhir_at`. Jumlah tabel bisnis tetap sembilan.
+Snapshot adalah dokumen historis publik, bukan tabel relasi baru. Sesi lama tetap
+valid; CHECK menegakkan kelengkapan metadata, batas jumlah, bentuk/ukuran array,
+dan deadline khusus BERWAKTU. Perubahan metadata memakai lock timeout 3 detik,
+constraint `NOT VALID` lalu validasi, dan unique index `CONCURRENTLY`. Migrate ulang
+menjadi no-op; partial apply dapat diperbaiki dengan repair/migrate setelah penyebab
+gagal diperbaiki. Jangan mengedit V1–V3 yang sudah diterapkan.
+
+Rollback `db/rollback/U4__practice_session.sql` dijalankan manual dengan request
+start dihentikan, schema yang benar, dan setiap statement terpisah tanpa transaction
+wrapper. Aman diulang pada metadata kosong dan mempertahankan sesi lama. Jika ada
+snapshot aktif/tersimpan, rollback sengaja menolak agar soal/idempotency/deadline
+tidak hilang; ekspor/pulihkan metadata melalui rencana pemeliharaan sebelum rollback.
+
+Unit test memeriksa distribusi lintas bagian dengan seed tetap, status/jumlah/unik,
+deadline aktual dan batas kedaluwarsa, persentase vs jumlah salah, fallback,
+overflow/pecahan hampir sama, dan bagian terlemah di akhir iterator besar.
+Integration test memakai PostgreSQL lokal terisolasi untuk role, agregasi per siswa,
+snapshot tanpa jawaban, retry/konflik/konkurensi, rollback saat gagal, batas lock,
+deadline yang tidak di-reset, serta penerapan ulang/rollback/constraint migrasi V4.
+Jalankan `mvn -Ppostgres-it clean install` sesuai environment Step 2; test tidak
+menggunakan Gemini atau Supabase. Endpoint menjawab soal, pencatatan jawaban, dan
+evaluasi belum dibuat; validasi deadline saat menerima jawaban diterapkan bersama
+endpoint jawaban pada step berikutnya, memakai `berakhir_at` server yang tersimpan.
