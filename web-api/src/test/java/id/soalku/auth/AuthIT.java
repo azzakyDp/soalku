@@ -44,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 @SpringBootTest
+@org.springframework.test.context.ActiveProfiles("test")
 @AutoConfigureMockMvc
 @Import({AuthIT.MentorProbe.class, AuthIT.MentorFilterProbe.class})
 @ExtendWith(OutputCaptureExtension.class)

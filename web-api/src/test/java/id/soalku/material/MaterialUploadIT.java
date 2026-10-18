@@ -27,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 @SpringBootTest
+@org.springframework.test.context.ActiveProfiles("test")
 @AutoConfigureMockMvc
 class MaterialUploadIT {
     private static final String SCHEMA="soalku_it_upload_"+UUID.randomUUID().toString().replace("-","");

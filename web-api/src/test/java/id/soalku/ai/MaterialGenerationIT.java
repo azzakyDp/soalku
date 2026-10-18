@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 @SpringBootTest @AutoConfigureMockMvc
+@ActiveProfiles("test")
 @ExtendWith(OutputCaptureExtension.class)
 class MaterialGenerationIT {
     private static final String SCHEMA="soalku_it_ai_"+UUID.randomUUID().toString().replace("-","");

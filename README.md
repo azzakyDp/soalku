@@ -387,6 +387,55 @@ error dokumen, health storage, serta kompensasi saat database menolak insert.
 
 ## Step 6 Generate ringkasan dan soal melalui Gemini
 
+### Isolasi test otomatis dan smoke manual
+
+Test Maven tidak menghubungi Google. Test orkestrasi `MaterialGenerationMockIT`
+memakai mock `QuestionGeneratorService` dengan transaksi PostgreSQL nyata;
+test adapter memakai server HTTP loopback dan respons JSON fixture. Seluruh
+Spring integration test memakai profile `test`, yang memaksa key kosong dan
+endpoint loopback port 9, meskipun CI/developer sudah mengekspor key Gemini.
+Hanya test adapter/integrasi HTTP yang secara eksplisit mengganti endpoint itu
+dengan server lokal yang dibuat test. Tidak ada credential Gemini asli pada
+source test; keluaran/assert bersifat deterministik dan tidak memakai kuota API.
+
+Satu smoke manual tersedia di `scripts/Invoke-GeminiSmoke.ps1`, di luar source,
+profile dan lifecycle Maven. Jalankan aplikasi lokal dengan key pada environment,
+unggah fixture nonsensitif milik akun penguji, set `SOALKU_SMOKE_TOKEN` dan
+`SOALKU_SMOKE_MATERIAL_ID`, lalu panggil secara eksplisit:
+
+```powershell
+./scripts/Invoke-GeminiSmoke.ps1 -ConfirmPaidCall
+```
+
+Script menolak jalan tanpa switch tersebut dan hanya menerima server loopback.
+Ia tidak dijalankan oleh `mvn test`, `verify`, `clean install`, atau hook Git.
+Uji live pada sesi sebelumnya adalah verifikasi manual terpisah, bukan test CI.
+
+### PostgreSQL dan build Windows
+
+Versi Supabase project belum tersedia untuk diverifikasi. Testing lokal memakai
+PostgreSQL 18.4/Flyway 11.7.2 dan masih mempunyai risiko perbedaan major dengan
+produksi. Query pemeriksaan read-only dan tindak lanjut dicatat pada
+[status kompatibilitas PostgreSQL](docs/verification/postgres-compatibility.md).
+
+Checkout utama sekarang `C:\data\coding\soalku`; folder Documents lama menjadi
+cadangan. Build bersih dari lokasi baru dapat dijalankan dengan Java 21 dan Maven:
+
+```shell
+mvn clean install
+mvn -Ppostgres-it clean install
+```
+
+Perintah kedua membutuhkan environment database testing seperti dijelaskan di
+Step 2. Pada mesin kerja ini tersedia Maven portable di
+`work/tooling/apache-maven-3.9.16/bin/mvn.cmd` dan cache lokal `work/m2` (tidak
+di-commit); tambahkan `-Dmaven.repo.local=work/m2` bila memakainya dari sandbox.
+Kendala lama memperlihatkan `AccessDeniedException` saat Java menormalisasi path
+JAR di Documents. Pada pemeriksaan ini tidak ada `index.lock` atau proses
+Git/Java sisa sebelum build. Tidak ada dasar untuk menyalahkan antivirus/sync
+atau menghentikan proses lain secara paksa; direktori baru diuji dengan kompilasi
+bersih tanpa workaround classpath maupun melewati compile/test.
+
 Set `GEMINI_API_KEY` pada environment proses aplikasi; Spring Boot tidak otomatis
 memuat `.env`. Jangan menaruh key di source, argumen URL, log, atau Git.
 Contoh PowerShell dengan input tersembunyi:
