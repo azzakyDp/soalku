@@ -1,0 +1,23 @@
+# Maven build output
+**/target/
+
+# Local tools, dependency cache, and scratch files
+/work/
+/outputs/
+
+# IDE and operating system files
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.log
+**/data/
